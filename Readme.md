@@ -122,3 +122,5 @@ input/output length combination):
 ![Output throughput](results/output_throughput.png)
 ![GPU power draw](results/gpu_power.png)
 ![Energy per token](results/energy_per_token.png)
+![Time to first token](results/ttft.png)
+![Time per output token](results/tpot.png)
