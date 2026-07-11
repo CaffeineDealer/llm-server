@@ -8,12 +8,12 @@ levels and prompt/output lengths.
 
 1. **Install vLLM** (inside a virtual environment):
    ```
-   pip install vllm
+   uv pip install vllm
    ```
 
 2. **Install Hugging Face Hub client** (used to authenticate and pull the model):
    ```
-   pip install huggingface_hub
+   uv pip install huggingface_hub
    ```
    Log in with an HF access token — required since some Qwen weights/repos are gated
    or benefit from being pulled under an authenticated account:
@@ -29,7 +29,7 @@ levels and prompt/output lengths.
 
 4. **Install Gradio** (for the chat interface):
    ```
-   pip install gradio
+   uv pip install gradio
    ```
 
 5. **Start the vLLM server**:
