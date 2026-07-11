@@ -3,9 +3,10 @@ from openai import OpenAI
 import base64
 import sqlite3
 import time
+import os
 
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
-DB_PATH = "/home/yavar/Documents/llm/metrics.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metrics.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
