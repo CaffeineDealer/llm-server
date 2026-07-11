@@ -1,0 +1,132 @@
+# vLLM Serving Benchmark
+
+Benchmarking inference throughput, latency, and GPU power draw for a locally-hosted
+`Qwen/Qwen3-VL-32B-Instruct-FP8` model served with vLLM, across a grid of concurrency
+levels and prompt/output lengths.
+
+## Environment setup
+
+1. **Install vLLM** (inside a virtual environment):
+   ```
+   pip install vllm
+   ```
+
+2. **Install Hugging Face Hub client** (used to authenticate and pull the model):
+   ```
+   pip install huggingface_hub
+   ```
+   Log in with an HF access token — required since some Qwen weights/repos are gated
+   or benefit from being pulled under an authenticated account:
+   ```
+   huggingface-cli login
+   ```
+
+3. **Pull the model**: no separate manual download step is required — `vllm serve`
+   pulls `Qwen/Qwen3-VL-32B-Instruct-FP8` from the Hugging Face Hub automatically
+   the first time it's referenced, caching it locally for subsequent runs. Being
+   logged in via `huggingface-cli login` beforehand ensures this download succeeds
+   if the repo requires authentication.
+
+4. **Install Gradio** (for the chat interface):
+   ```
+   pip install gradio
+   ```
+
+5. **Start the vLLM server**:
+   ```
+   vllm serve "Qwen/Qwen3-VL-32B-Instruct-FP8" --max-model-len 24000 --gpu-memory-utilization 0.95
+   ```
+
+6. **Run the Gradio chat interface** (separate terminal, same environment):
+   ```
+   python3 chat_interface.py
+   ```
+   This is a custom script that connects to the running vLLM server (via its
+   OpenAI-compatible API) and exposes a multimodal chat UI for manual testing.
+
+## Setup
+
+- Model: `Qwen/Qwen3-VL-32B-Instruct-FP8`
+- Server: single GPU (RTX Pro 5000, 48GB VRAM), `--gpu-memory-utilization 0.95`, `--max-model-len 24000`
+- Serving started with:
+  ```
+  vllm serve "Qwen/Qwen3-VL-32B-Instruct-FP8" --max-model-len 24000 --gpu-memory-utilization 0.95
+  ```
+- Client interface: a multimodal Gradio chat app (`chat_interface.py`), run separately from benchmarking
+
+## Parameter grid
+
+| Parameter | Values |
+|---|---|
+| `num_prompts` (concurrency) | 1, 10, 50, 100 |
+| `input_len` (tokens) | 128, 512, 1024 |
+| `output_len` (tokens) | 128, 256 |
+
+24 combinations total, generated with a synthetic `random` dataset via vLLM's built-in
+benchmark client (`vllm bench serve`).
+
+## Scripts
+
+### `sweep.py`
+Runs the full parameter grid against the live vLLM server. For each combination:
+- Calls `vllm bench serve` via `subprocess`, capturing stdout
+- Samples GPU power draw in a background thread (`nvidia-smi --query-gpu=power.draw`,
+  polled every 0.2s) for the duration of the run
+- Records wall-clock duration of the run
+- Skips (and logs) any combination that times out, rather than aborting the whole sweep
+- Saves all raw results to `results_raw.json`
+
+### `analyze.py`
+Parses `results_raw.json`:
+- Extracts throughput/latency metrics from each run's raw stdout via regex
+  (request throughput, output token throughput, total token throughput, mean TTFT, mean TPOT)
+- Computes **energy per output token** (joules/token) from average GPU power and run duration
+- Writes everything to `parsed_results.csv`
+
+### `plot.py`
+Generates one line chart per metric (concurrency on the x-axis, one line per
+input/output length combination):
+- `output_throughput.png` — output tokens/sec
+- `request_throughput.png` — requests/sec
+- `ttft.png` — mean time to first token
+- `tpot.png` — mean time per output token
+- `gpu_power.png` — average GPU power draw
+- `energy_per_token.png` — energy efficiency (joules per output token)
+
+## Key findings so far
+
+- **Throughput scales well with concurrency up to a point.** Aggregate output
+  token throughput increases substantially from 1 → 50 concurrent requests, since
+  the GPU can batch decode steps across requests instead of processing one
+  sequential stream at a time.
+- **Long prompts hit a wall at high concurrency.** For `input_len` 512 and 1024,
+  throughput actually *drops* going from 50 → 100 concurrent requests — the KV
+  cache can't hold enough sequences at once, so the server queues/preempts work
+  instead of gaining more parallelism.
+- **TTFT grows sharply with concurrency**, especially for long prompts (up to
+  ~25 seconds at `num_prompts=100`, `input_len=1024`) — a direct cost of request
+  queuing under load.
+- **A single request cannot approach the server's peak throughput.** Peak
+  aggregate throughput (~1800 tok/s) is a batching effect across many concurrent
+  decode steps, not a per-request speed limit; a lone request is inherently
+  bound by sequential token generation (~30 tok/s here).
+- **GPU power draw rises with concurrency**, but not proportionally to
+  throughput — meaning energy efficiency (joules/token) is not constant across
+  the grid and there is likely an optimal input/output/concurrency combination
+  that minimizes energy per token while still producing meaningful throughput.
+
+## Results
+
+*(Plots to be added below — drag and drop the `.png` files generated by `plot.py`.)*
+
+## Notes / lessons learned
+
+- Always persist results to disk (e.g. `json.dump`) before a long-running sweep,
+  not just at the very end — a completed run with no save step is a lost run.
+- `subprocess.run(..., timeout=...)` killing the client process does not
+  guarantee the server-side work tied to that request stops; a timed-out run can
+  leave residual load on the server for subsequent runs. Prefer generous
+  timeouts over aggressive ones for benchmark sweeps.
+- `vllm bench serve` (bundled with the `vllm` package under `vllm.benchmarks.serve`)
+  has no `--save-result`/JSON output option in this version, so results are
+  parsed from captured stdout via regex rather than structured output.
